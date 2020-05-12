@@ -23,7 +23,8 @@ sudo apt install libfltk1.3-dev
 ```
 - Compiling:
 ```
-gcc autobend.c -o autobend -lfltk -lasound -lpthread -lstdc++```
+gcc autobend.c -o autobend -lfltk -lasound -lpthread -lstdc++
+```
 - Installing:
 ```
 sudo cp autobend /usr/local/bin/
