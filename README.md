@@ -33,4 +33,11 @@ sudo cp autobend /usr/local/bin/
 ```
 autobend [file]
 ```
-File save and load not implemented yet.
+Using the sliders with the mouse gives only coarse control, accuracy requires using the keyboard shortcuts
+up arrow or numeric keypad +, down arrow or numeric keypad -, page up and down or using the mouse scroll wheel.
+Delete or ., home and end will set the value to 0, -8192 and +8191 respectively.
+
+Autobend has no way of knowing the bender range on your synth, the pitch bend midi message range is fixed from -8192 to 8191
+but the corresponding musical interval may vary, therefore tuning has to be done by ear.
+
+Files default to .conf file type. This is a plain text file, whith a very simple syntax: each line is of the form "note space offset", for example E -2048.

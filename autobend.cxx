@@ -16,11 +16,17 @@
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Slider.H>
 #include <FL/Fl_Value_Slider.H>
-// #include <FL/Fl_Button.H>
+#include <FL/Fl_Button.H>
 // #include <FL/Fl_Toggle_Button.H>
+#include <FL/Fl_File_Chooser.H>
+
 
 #include <alsa/asoundlib.h>
 #include <pthread.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
 
 // from https://stackoverflow.com/questions/14769603/how-can-i-write-a-clamp-clip-bound-macro-for-returning-a-value-in-a-gi
 #define CLAMP(x, low, high) ({\
@@ -40,10 +46,53 @@ static void show_err ( const char * format, ... ){
     va_end(args);
 }
 
+int strtonote(const char* str, const char **endptr){
+	int note_nums[]={9,11,0,2,4,5,7}; // A..G
+	const char *ptr=str;
+	char *ptr2;
+	int note;
+	while(*ptr==32) ptr++; // Skip leading spaces
+	char c=toupper(*ptr);
+	if(c>='A' && c<='G'){
+		// got a proper note name
+		note=note_nums[c-'A'];
+		ptr++;
+		// check for alteration (single or double)
+		if (*ptr=='#') {ptr++; note++; if (*ptr=='#') {ptr++; note++;}}
+		else if (*ptr=='x' || *ptr=='X') {ptr++; note+=2;}
+		else if (*ptr=='b') {ptr++; note--; if (*ptr=='b') {ptr++; note--;}}
+		note = note % 12; // Cbb -> -2
+		// get octave
+		/*
+		octave=strtol(ptr, &ptr2, 10)+1;
+		if(ptr2>ptr){
+			note+=12*octave;
+			if(note<0 or note>127){
+				fprintf(stderr, "Note %u out of range\n", note);
+				note=-1;
+				ptr=str;
+			}else{
+				ptr=ptr2;
+			}
+		}else{
+			fprintf(stderr, "Cannot convert \"%s\" to octave number\n", ptr);
+			note=-1;
+			ptr=str;
+		}
+		*/
+	}else{
+		// Illegal note name
+		if (*ptr) fprintf(stderr, "Cannot convert '%c' (%u) to note\n", c, c);
+		note=-1;
+		ptr=str;
+	}
+	*endptr=ptr;
+	return(note);
+}
 // FLTK
 Fl_Double_Window *main_window=(Fl_Double_Window *)0;
 
-class Key_Slider : public Fl_Value_Slider
+class Note_Slider : public Fl_Value_Slider
 {
 protected:
 /*
@@ -55,16 +104,16 @@ private:
 
 	int handle(int event);
 public:
-	Key_Slider(int x, int y, int w, int h, const char *l=0) : Fl_Value_Slider(x,y,w,h,l)
+	Note_Slider(int x, int y, int w, int h, const char *l=0) : Fl_Value_Slider(x,y,w,h,l)
 	{
 //		callback(&event_callback, (void*)this);
 //		end(); // ??
 	}
-	~Key_Slider() { }
+	~Note_Slider() { }
 };
 
-int Key_Slider::handle(int event){
-//	printf("Key_Slider::Handle!\n");
+int Note_Slider::handle(int event){
+//	printf("Note_Slider::Handle!\n");
 	double val, minval, maxval, step;
 	val=this->value();
 	minval=this->minimum();
@@ -104,6 +153,7 @@ int Key_Slider::handle(int event){
 						this->value(val);
 						break;
 					case FL_KP+'.':
+					case FL_Delete:
 						val=0;
 						if (val>maxval) val=maxval;
 						if (val<minval) val=minval;
@@ -128,20 +178,20 @@ int Key_Slider::handle(int event){
 			}
 			break;
 		case FL_FOCUS:
-//			printf("Key_Slider::Focus %lu!\n", this->argument());
+//			printf("Note_Slider::Focus %lu!\n", this->argument());
 			Fl::focus(this);
 			this->callback()((Fl_Widget*)this, 0);
 			if (visible()) damage(FL_DAMAGE_ALL);
 			return 1;
 		case FL_UNFOCUS:
-			// printf("Key_Slider::Unfocus %lu!\n", this->argument());
+			// printf("Note_Slider::Unfocus %lu!\n", this->argument());
 			this->callback()((Fl_Widget*)this, 0);
 			if (visible()) damage(FL_DAMAGE_ALL);
 			return 1;
 		case FL_PUSH:
 		/*
 			if(Fl::event_clicks()){ // Double click or more
-				// printf("Key_Slider::double click %lu!\n", this->argument());
+				// printf("Note_Slider::double click %lu!\n", this->argument());
 				this->value(minval);
 				this->yvalue(yminval);
 				this->callback()((Fl_Widget*)this, 0);
@@ -216,7 +266,11 @@ void send_pitchbend(int pb){
 	snd_seq_event_output_direct( seq_handle, &ev );
 }
 
+char note_names[][3]={
+	"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+};
 int note_offset[]={0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+Note_Slider * note_sliders[12];
 
 static void parm_callback(Fl_Widget* o, void*) {
 	int note, offset, pitchbend_out;
@@ -232,10 +286,122 @@ static void parm_callback(Fl_Widget* o, void*) {
 	}
 }
 
-// GUI creation helper functions
+int load_file(const char *filename)
+{
+    FILE * fp;
+    char * line = NULL;
+    size_t len = 0;
+    ssize_t read;
+    
+	const char *ptr;
+	char *ptr2;
+
+	int note, offset, errs=0;
+
+    fp = fopen(filename, "r");
+    if (fp == NULL)
+        return(-1);
+
+	printf("Opened %s\n", filename);
+
+    while ((read = getline(&line, &len, fp)) != -1) {
+        // printf("Retrieved line of length %zu:\n", read);
+        // printf("%s", line);
+		note=strtonote(line, &ptr);
+        offset=strtol(ptr, &ptr2, 10);
+        // printf("%u %u\n", note, offset);
+        if (*ptr2 && *ptr2 != '\n') show_err("Extra ignored: %s", ptr2);
+        if (ptr2==ptr){
+			show_err("Missing offset after %s", line); errs++;
+		}else if(offset<-8192 or offset >8191){
+			show_err("Illegal offset %d", offset); errs++;
+		}else{
+			note_offset[note]=offset;
+			note_sliders[note]->value(offset);
+			note_sliders[note]->redraw();
+		}
+    }
+
+    fclose(fp);
+    
+	printf("Closed %s\n", filename);
+	
+    if (line)
+        free(line);
+    return(errs!=0);
+}
+
+void write_file(const char *filename, bool auto_ext ){
+	char *filename2, *filename3;
+	// char line[10];
+	FILE *file;
+	filename2=(char *)malloc(strlen(filename)+6);
+	if (filename2){
+		strcpy(filename2, filename);
+		if (auto_ext && strchr(filename2,'.') == 0)
+			strcat(filename2, ".conf");
+		// Check existence and prompt before overwriting
+		if( access( filename2, F_OK ) != -1 ) {
+			if(fl_choice("File already exists. Overwrite?","Yes", "No", 0)){
+				free(filename2);
+				fprintf(stderr, "Write file cancelled.\n");
+				return;
+			}
+			printf("Overwriting %s\n", filename2);
+		}
+		file=fopen(filename2,"wb");
+		if (file==0){
+			fprintf(stderr,"ERROR: Can not open file %s\n", filename2);
+		}else{		
+			for (int note=0; note<12;note++){
+				fprintf(file, "%s %d\n", note_names[note], note_offset[note]);
+			}
+			fclose(file);
+		}
+		free(filename2);
+	}else{
+		fprintf(stderr, "ERROR: Cannot allocate memory");
+	}
+}
+
+
+
+// GUI creation helper function and callbacks
+
+void fc_load_callback(Fl_File_Chooser *w, void *userdata){
+	// This is called on any user action, not just ok depressed!
+	// ?? should remember directory across calls
+	if(w->visible()) return; // Do nothing until user has pressed ok
+	int errs=load_file(w->value());
+    for(int note=0; note<12; note++) note_sliders[note]->redraw();
+	if(errs) fl_alert("Error(s) loading file %s", w->value());
+}
+
+static void btn_load_callback(Fl_Widget* o, void*) {
+    Fl_File_Chooser *fc = new Fl_File_Chooser(".","config files(*.conf)",Fl_File_Chooser::SINGLE,"Input file");
+    fc->preview(0);
+    fc->callback(fc_load_callback);
+    fc->show();
+}
+
+void fc_save_callback(Fl_File_Chooser *w, void *userdata){
+	// ?? should remember directory across calls
+	if(w->visible()) return; // Do nothing until user has pressed ok
+	write_file(w->value(), w->filter_value() == 0);
+}
+
+static void btn_save_callback(Fl_Widget* o, void*) {
+   Fl_File_Chooser *fc = new Fl_File_Chooser(".","config files(*.conf)",Fl_File_Chooser::CREATE,"Output file");
+    // fc->value(tone_name);
+    fc->preview(0);
+    fc->callback(fc_save_callback);
+    fc->show();
+}
+
+
 Fl_Value_Slider *make_value_slider(int x, int y, int w, int h, const char * label, int note_number){
 	// Fl_Value_Slider *o = new Fl_Value_Slider(x, y, w, h, label);
-	Key_Slider *o = new Key_Slider(x, y, w, h, label);
+	Note_Slider *o = new Note_Slider(x, y, w, h, label);
 	o->argument(note_number);
 	o->bounds(-8192, +8191); // Possibly useless
 	o->range(+8191, -8192); // low to high!
@@ -244,14 +410,16 @@ Fl_Value_Slider *make_value_slider(int x, int y, int w, int h, const char * labe
 	o->callback((Fl_Callback*)parm_callback); // Handles both tone and patch parameters
 	o->slider_size(.04);
 	o->textsize(11);
+	o->tooltip("Use mouse wheel or keyboard arrows for fine adjustment");
+	note_sliders[note_number]=o;
 	return(o);
 }
 
 // GUI creation
 Fl_Double_Window* make_window() {
-	int w=35, h=25, spacing=5;
+	int w=40, h=25, spacing=5;
 	int x=spacing, y=spacing;
-    int ww=spacing+12*(w+spacing);
+    int ww=spacing+13*(w+spacing);
     int hh=12*h+4*spacing;
 	main_window = new Fl_Double_Window(ww, hh, "Autobend");
 	y+=h+spacing; // room for labels
@@ -267,6 +435,10 @@ Fl_Double_Window* make_window() {
 	make_value_slider(x, y, w, 11*h, "A", 9); x += w + spacing;
 	make_value_slider(x, y, w, 11*h, "A#", 10); x += w + spacing;
 	make_value_slider(x, y, w, 11*h, "B", 11); x += w + spacing;
+	Fl_Button *b=new Fl_Button(x, y, w, h, "Load"); y += h+spacing;
+	b->callback((Fl_Callback*)btn_load_callback);
+	b=new Fl_Button(x, y, w, h, "Save"); y += h+spacing;
+	b->callback((Fl_Callback*)btn_save_callback);
 	main_window->end();
 	main_window->resizable(main_window);
 	return main_window;
@@ -323,9 +495,13 @@ static void *alsa_midi_process(void *) {
 
 
 int main(int argc, char **argv) {
-
+	
 	Fl_Window* win = make_window();
 //	win->callback(window_callback);
+
+	for(int i=1; i<argc;i++)
+		load_file(argv[i]);
+
 
 	// midi init
 	pthread_t midithread;
