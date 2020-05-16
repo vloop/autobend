@@ -9,7 +9,11 @@
 // Build with: 
 // gcc autobend.c -o autobend -lfltk -lasound -lpthread -lstdc++
 
-// TODO slider react to keys + - up dn pgup pgdn home end 0 (suppr?)
+// TODO
+// channel command line parameter
+// activity indicator
+// pitch bend indicator two rectangles green pb in, red offset
+// sigint handler
  
 #include <FL/Fl.H>
 #include <FL/fl_ask.H>
@@ -19,7 +23,7 @@
 #include <FL/Fl_Button.H>
 // #include <FL/Fl_Toggle_Button.H>
 #include <FL/Fl_File_Chooser.H>
-
+#include <FL/Fl_Input.H>
 
 #include <alsa/asoundlib.h>
 #include <pthread.h>
@@ -61,7 +65,8 @@ int strtonote(const char* str, const char **endptr){
 		if (*ptr=='#') {ptr++; note++; if (*ptr=='#') {ptr++; note++;}}
 		else if (*ptr=='x' || *ptr=='X') {ptr++; note+=2;}
 		else if (*ptr=='b') {ptr++; note--; if (*ptr=='b') {ptr++; note--;}}
-		note = note % 12; // Cbb -> -2
+		if(note<0) note+=12; // Cbb -> -2 -> 10
+		note = note % 12;
 		// get octave
 		/*
 		octave=strtol(ptr, &ptr2, 10)+1;
@@ -91,6 +96,19 @@ int strtonote(const char* str, const char **endptr){
 }
 // FLTK
 Fl_Double_Window *main_window=(Fl_Double_Window *)0;
+Fl_Input *txt_midi_channel=(Fl_Input *)0;
+int midi_channel=0; // 0..15 for channels 1..16
+
+static void txt_midi_channel_callback(Fl_Widget* o, void*) {
+	const char *ptr=((Fl_Input *)o)->value();
+	char *ptr2;
+	long c;
+	c=strtoul(ptr, &ptr2, 0);
+	if(c<1 or c>16)
+		show_err("Midi channel must be between 1 and 16");
+	else
+		midi_channel=c-1;
+}
 
 class Note_Slider : public Fl_Value_Slider
 {
@@ -113,67 +131,56 @@ public:
 };
 
 int Note_Slider::handle(int event){
-//	printf("Note_Slider::Handle!\n");
-	double val, minval, maxval, step;
+	double val, old_val, minval, maxval, step;
 	val=this->value();
+	old_val=val;
 	minval=this->minimum();
 	maxval=this->maximum();
 	if (minval>maxval){
 		minval=maxval;
 		maxval=this->minimum();
 	}
-	step=1; // (maxval-minval)/100.0f; // ??
+	step=1;
 	// printf("key %u on %lu\n", Fl::event_key (), this->argument());
 	// printf("xmin %f xmax %f step %f\n", minval, xmaxval, step);
 	// printf("ymin %f ymax %f ystep %f\n", yminval, ymaxval, ystep);
 	switch (event) 
 	{
-		// case FL_KEYUP:
 		case FL_KEYBOARD: // It seems every control is getting that until handled ?
+			// Arrow keys already work as expected, let the parent handle it
 			if (Fl::focus() == this) {
 				switch(Fl::event_key ()){
 					case FL_Home:
-						this->value(minval);
+						val=minval;
 						break;
 					case FL_End:
-						this->value(maxval);
+						val=maxval;
 						break;
 					case FL_KP+'+':
-					// case FL_Up:
-					// case FL_Right:
 						val+=step;
-						if (val>maxval) val=maxval;
-						this->value(val);
 						break;
 					case FL_KP+'-':
-					// case FL_Down:
-					// case FL_Left:
 						val-=step;
-						if (val<minval) val=minval;
-						this->value(val);
 						break;
 					case FL_KP+'.':
 					case FL_Delete:
 						val=0;
-						if (val>maxval) val=maxval;
-						if (val<minval) val=minval;
-						this->value(val);
 						break;
 					case FL_Page_Up:
 						val+=step*10;
-						if (val>maxval) val=maxval;
-						this->value(val);
 						break;
 					case FL_Page_Down:
 						val-=step*10;
-						if (val<minval) val=minval;
-						this->value(val);
 						break;
 					default:
 						return Fl_Value_Slider::handle(event);
 				}
-				this->set_changed(); // TODO Not always changed
-				this->callback()((Fl_Widget*)this, 0);
+				val=CLAMP(val, minval, maxval);
+				if(val!=old_val){
+					this->value(val);
+					this->set_changed();
+					this->callback()((Fl_Widget*)this, 0);
+				}
 				return 1;
 			}
 			break;
@@ -193,7 +200,6 @@ int Note_Slider::handle(int event){
 			if(Fl::event_clicks()){ // Double click or more
 				// printf("Note_Slider::double click %lu!\n", this->argument());
 				this->value(minval);
-				this->yvalue(yminval);
 				this->callback()((Fl_Widget*)this, 0);
 				return 1; // Don't call base class handler !!
 			}
@@ -211,21 +217,14 @@ int Note_Slider::handle(int event){
 			return 1;
 		case FL_MOUSEWHEEL:
 			// printf("FL_MOUSEWHEEL %d\n",Fl::event_dy());
+			// This is active even if control doesn't have the focus!
 			val-=step*Fl::event_dy();
-			if (val<maxval){
-				val+=step;
-				if (val>maxval){
-					val=maxval;
-				}
+			val=CLAMP(val, minval, maxval);
+			if(val!=old_val){
+				this->value(val);
+				this->set_changed();
+				this->callback()((Fl_Widget*)this, 0);
 			}
-			if (val>minval){
-				val-=step;
-				if (val<minval){
-					val=minval;
-				}
-			}
-			this->value(val);
-			this->callback()((Fl_Widget*)this, 0);
 			return 1;
 	}
 	return Fl_Value_Slider::handle(event);
@@ -237,6 +236,8 @@ int portid;
 int npfd;
 struct pollfd *pfd;
 int pitchbend_in=0, last_note=-1;
+bool hold_active;
+int pitchbend_offset=0;
 
 snd_seq_t *open_seq(const char *midiName, int &portid) {
   snd_seq_t *seq_handle;
@@ -256,6 +257,7 @@ snd_seq_t *open_seq(const char *midiName, int &portid) {
 }
 
 void send_pitchbend(int pb){
+	// ?? midi channel
 	snd_seq_event_t ev;
 	snd_seq_ev_set_source( &ev, portid );
 	snd_seq_ev_set_subs( &ev );
@@ -272,13 +274,17 @@ char note_names[][3]={
 int note_offset[]={0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 Note_Slider * note_sliders[12];
 
+bool key_down[128], key_held[128];
+int key_stack[128];
+int *key_stack_ptr=key_stack;
+
 static void parm_callback(Fl_Widget* o, void*) {
 	int note, offset, pitchbend_out;
 	if (o){
 		note=o->argument();
 		offset=((Fl_Valuator*)o)->value();
 		note_offset[note]=offset;
-		// Todo if current note send new pitch bend value ??
+		// If control refers to current note send new pitch bend value
 		if(note==last_note){
 			pitchbend_out=CLAMP(pitchbend_in+offset, -8192, 8191);
 			send_pitchbend(pitchbend_out);
@@ -439,6 +445,15 @@ Fl_Double_Window* make_window() {
 	b->callback((Fl_Callback*)btn_load_callback);
 	b=new Fl_Button(x, y, w, h, "Save"); y += h+spacing;
 	b->callback((Fl_Callback*)btn_save_callback);
+	y += 25; // room for label
+	txt_midi_channel=new Fl_Input(x, y, w, h, "ch.");
+	txt_midi_channel->align(FL_ALIGN_TOP);
+	txt_midi_channel->callback((Fl_Callback*)txt_midi_channel_callback);
+	txt_midi_channel->tooltip("Set the midi channel (1..16)");
+	char str_midi_channel[5];
+	sprintf(str_midi_channel, "%u", midi_channel+1);
+	txt_midi_channel->value(str_midi_channel);
+
 	main_window->end();
 	main_window->resizable(main_window);
 	return main_window;
@@ -448,48 +463,189 @@ Fl_Double_Window* make_window() {
 // MIDI receive callback //
 ///////////////////////////
 
+static void do_all_notes_off(){
+	for(int i=0; i<128;i++){
+		key_down[i]=false;
+		key_held[i]=false;
+	}
+	last_note=-1;
+	pitchbend_offset=0;
+	hold_active=false;
+	key_stack_ptr=key_stack;
+}
+
+typedef int (*get_note_func_t)();
+get_note_func_t get_note_func;
+
+static int highest_active_note(){
+	int note=-1;
+	for(int i=127; i>=0; i--){
+		if(key_down[i] || key_held[i]){
+			note=i;
+			break;
+		}
+	}
+	return(note);
+}
+
+static int lowest_active_note(){
+	int note=-1;
+	for(int i=0; i<128; i++){
+		if(key_down[i] || key_held[i]){
+			note=i;
+			break;
+		}
+	}
+	return(note);
+}
+
+static int no_active_note(){
+	return(-1);
+}
+
+static int latest_active_note(){
+	if(key_stack_ptr>key_stack)
+		return(*(key_stack_ptr-1));
+	else
+		return(-1);
+}
+
+static void remove_note_from_stack(int note){
+	// Removes all occurences of note
+	// even though there should be only one
+	int *src, *dest;
+	src=key_stack;
+	dest=key_stack;
+	while(src<key_stack_ptr){
+		if(*src==note){
+			src++;
+		}else{
+			*dest++=*src++;
+		}
+	}
+	key_stack_ptr=dest;
+}
+
+static void add_note_to_stack(int note){
+	*key_stack_ptr++=note;
+}
+
+static void set_slider_color(int note, Fl_Color color){
+	note %= 12;
+	if(note<0) note+=12;
+	Fl::lock();
+	note_sliders[note]->color(color);
+	// note_sliders[note]->labelcolor(color);
+	// note_sliders[note]->label("K!");
+	note_sliders[note]->redraw();
+	Fl::awake();
+	Fl::unlock();
+}
+
 static void *alsa_midi_process(void *) {
 	snd_seq_event_t *ev;
 	snd_seq_event_t ev2;
-	int pitchbend_offset=0, pitchbend_out;
-	do {
+	int pitchbend_out, note;
+	while(true) {
 		while (snd_seq_event_input(seq_handle, &ev)) {
 			switch (ev->type) {
-			// ?? do something about noteoff (play highest remaining note?)
-			// what about hold ?
 			case SND_SEQ_EVENT_PITCHBEND:
-				pitchbend_in=ev->data.control.value;
-				pitchbend_out=CLAMP(pitchbend_in+pitchbend_offset, -8192, 8191);
-				ev->data.control.value=pitchbend_out;
-				snd_seq_ev_set_source( ev, portid );
-				snd_seq_ev_set_subs( ev );
-				snd_seq_ev_set_direct( ev );
-				snd_seq_event_output_direct( seq_handle, ev );
-				snd_seq_free_event(ev);
+				if (ev->data.control.channel==midi_channel){
+					pitchbend_in=ev->data.control.value;
+					pitchbend_out=CLAMP(pitchbend_in+pitchbend_offset, -8192, 8191);
+					ev->data.control.value=pitchbend_out;
+				}
 			break;
 			case SND_SEQ_EVENT_NOTEON:
-				last_note=ev->data.note.note % 12;
-				pitchbend_offset=note_offset[last_note];
-				// send pitchbend out
-				snd_seq_ev_set_source( &ev2, portid );
-				snd_seq_ev_set_subs( &ev2 );
-				snd_seq_ev_set_direct( &ev2 );
-				ev2.type = SND_SEQ_EVENT_PITCHBEND;
-				pitchbend_out=CLAMP(pitchbend_in+pitchbend_offset, -8192, 8191);
-				ev2.data.control.value = pitchbend_out;
-				snd_seq_event_output_direct( seq_handle, &ev2 );
-				// Fall through default (send note)
+				if (ev->data.note.channel==midi_channel){
+					
+					// ?? For some reason this doesn't work on startup
+					// seems to work after moving mouse to main windows
+					// continues to work after moving the mouse away
+					// even if autobend is not focused
+					if(last_note>=0) set_slider_color(last_note, FL_BACKGROUND_COLOR);
+					note = ev->data.note.note;
+					last_note = note % 12;				
+					// printf("noteon %d\n", last_note);							
+					set_slider_color(last_note, FL_GREEN);
+					key_down[note] = true;
+					key_held[note] = hold_active;
+					add_note_to_stack(note);
+					pitchbend_offset = note_offset[last_note];
+					send_pitchbend(CLAMP(pitchbend_in+pitchbend_offset, -8192, 8191));
+				}
+			break;
+			case SND_SEQ_EVENT_CONTROLLER:
+				if (ev->data.control.channel==midi_channel){
+					if(ev->data.control.param>=123 || ev->data.control.param==120){
+						// All notes off and similar
+						set_slider_color(last_note, FL_BACKGROUND_COLOR);
+						do_all_notes_off();
+					}else if (ev->data.control.param==64){
+						// Hold
+						hold_active=ev->data.control.value>63;
+						if(hold_active) {
+							for(int i=0; i<128;i++) key_held[i]=key_down[i];
+						}else{ // Hold is released, turn off held notes
+							for(int i=0; i<128;i++){
+								key_held[i]=false;
+								if(!key_down[i]) remove_note_from_stack(i);
+							}
+							// If last_note was only held, find new current_note
+							if(!key_down[last_note]){
+								set_slider_color(last_note, FL_BACKGROUND_COLOR);
+								int current_note=get_note_func();
+								if (current_note>=0){
+									last_note=current_note % 12;
+									pitchbend_offset=note_offset[last_note];
+									send_pitchbend(CLAMP(pitchbend_in+pitchbend_offset, -8192, 8191));
+									set_slider_color(last_note, FL_GREEN);
+								}else{ // No active note
+									last_note=-1;
+									pitchbend_offset=0;
+								}
+							}
+						}
+					}
+				}
+			break;
+			case SND_SEQ_EVENT_NOTEOFF:
+				if (ev->data.note.channel==midi_channel){
+					note = ev->data.note.note;
+					key_down[note]=false;
+					if(!key_held[note]){
+						// printf("noteoff %d\n", note);							
+						remove_note_from_stack(note);
+						if(note%12==last_note){
+							set_slider_color(last_note, FL_BACKGROUND_COLOR);					
+							int current_note=get_note_func();
+							if (current_note>=0){
+								last_note=current_note % 12;
+								pitchbend_offset=note_offset[last_note];
+								send_pitchbend(CLAMP(pitchbend_in+pitchbend_offset, -8192, 8191));
+								set_slider_color(last_note, FL_GREEN);							
+							}else{ // No active note
+								last_note=-1;
+								pitchbend_offset=0;
+								// No need to send, there is currently no active note ?!
+							}
+						}
+					}
+				}
+			break;
 			default:
-				// Else resend what we received
-				// see https://tldp.org/HOWTO/MIDI-HOWTO-9.html
-				snd_seq_ev_set_source( ev, portid );
-				snd_seq_ev_set_subs( ev );
-				snd_seq_ev_set_direct( ev );
-				snd_seq_event_output_direct( seq_handle, ev );
-				snd_seq_free_event(ev);
-			}
+				// printf("type %d\n", ev->type);
+			break;
+			} // End of switch
+			// Resend what we received (possibly modified if it's a pitch bend)
+			// see https://tldp.org/HOWTO/MIDI-HOWTO-9.html
+			snd_seq_ev_set_source( ev, portid );
+			snd_seq_ev_set_subs( ev );
+			snd_seq_ev_set_direct( ev );
+			snd_seq_event_output_direct( seq_handle, ev );
+			snd_seq_free_event(ev);
 		} // end of first while, emptying the seqdata queue
-	} while (true); // doing forever, was  (snd_seq_event_input_pending(seq_handle, 0) > 0);
+	}
 	return 0;
 }
 
@@ -499,9 +655,10 @@ int main(int argc, char **argv) {
 	Fl_Window* win = make_window();
 //	win->callback(window_callback);
 
+	do_all_notes_off();
+	
 	for(int i=1; i<argc;i++)
 		load_file(argv[i]);
-
 
 	// midi init
 	pthread_t midithread;
@@ -510,11 +667,15 @@ int main(int argc, char **argv) {
 	pfd = (struct pollfd *)alloca(npfd * sizeof(struct pollfd));
 	snd_seq_poll_descriptors(seq_handle, pfd, npfd, POLLIN);
 
-	// create the thread and tell it to use Midi::work as thread function
+	// set keyboard policy
+	get_note_func= latest_active_note; // no_active_note;
+	// latest_active_note should match slim phatty and neutron
+
+	// create the thread
 	int err = pthread_create(&midithread, NULL, alsa_midi_process, seq_handle);
 	if (err) {
 		show_err("Error %u creating MIDI thread\n", err);
-		// should exit? This is non-blocking for one-way use from editor to MKS-50.
+		exit(-1);
 	}
 
 	// FLTK main loop
