@@ -28,6 +28,7 @@ gcc autobend.c -o autobend -lfltk -lasound -lpthread -lstdc++
 - Installing:
 ```
 sudo cp autobend /usr/local/bin/
+sudo cp po/fr/autobend.mo /usr/share/locale/fr/LC_MESSAGES/
 ```
 ## Usage
 ```

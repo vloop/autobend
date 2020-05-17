@@ -32,6 +32,19 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+// See http://www.labri.fr/perso/fleury/posts/programming/a-quick-gettext-tutorial.html
+// xgettext --keyword=_ --language=C --sort-output -o po/autobend.pot autobend.cxx
+// msginit --input=po/autobend.pot --locale=fr --output=po/fr/autobend.po
+// "Content-Type: text/plain; charset=UTF-8\n"
+// msgfmt --output-file=po/fr/autobend.mo po/fr/autobend.po
+// we need to install the po/fr/autobend.mo file to the place searched by the system and the right place to go is ./fr/LC_MESSAGES/autobend.mo
+// LANG=fr_FR.utf8 ./autobend kiki.cfg
+
+
+#include <libintl.h>
+#include <locale.h>
+#define _(STRING) gettext(STRING)
+
 // from https://stackoverflow.com/questions/14769603/how-can-i-write-a-clamp-clip-bound-macro-for-returning-a-value-in-a-gi
 #define CLAMP(x, low, high) ({\
   __typeof__(x) __x = (x); \
@@ -87,7 +100,7 @@ int strtonote(const char* str, const char **endptr){
 		*/
 	}else{
 		// Illegal note name
-		if (*ptr) fprintf(stderr, "Cannot convert '%c' (%u) to note\n", c, c);
+		if (*ptr) fprintf(stderr, _("Cannot convert '%c' (%u) to note\n"), c, c);
 		note=-1;
 		ptr=str;
 	}
@@ -105,7 +118,7 @@ static void txt_midi_channel_callback(Fl_Widget* o, void*) {
 	long c;
 	c=strtoul(ptr, &ptr2, 0);
 	if(c<1 or c>16)
-		show_err("Midi channel must be between 1 and 16");
+		show_err(_("Midi channel must be between 1 and 16"));
 	else
 		midi_channel=c-1;
 }
@@ -242,7 +255,7 @@ int pitchbend_offset=0;
 snd_seq_t *open_seq(const char *midiName, int &portid) {
   snd_seq_t *seq_handle;
   if (snd_seq_open(&seq_handle, "hw", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
-	fprintf(stderr, "Error opening ALSA sequencer.\n");
+	fprintf(stderr, _("Error opening ALSA sequencer.\n"));
 	exit(1);
   }
   snd_seq_set_client_name(seq_handle, midiName);
@@ -250,7 +263,7 @@ snd_seq_t *open_seq(const char *midiName, int &portid) {
 			SND_SEQ_PORT_CAP_READ|SND_SEQ_PORT_CAP_SUBS_READ|
 			SND_SEQ_PORT_CAP_WRITE|SND_SEQ_PORT_CAP_SUBS_WRITE,
 			SND_SEQ_PORT_TYPE_APPLICATION)) < 0) {
-	fprintf(stderr, "Error creating sequencer port.\n");
+	fprintf(stderr, _("Error creating sequencer port.\n"));
 	exit(1);
   }
   return(seq_handle);
@@ -308,7 +321,7 @@ int load_file(const char *filename)
     if (fp == NULL)
         return(-1);
 
-	printf("Opened %s\n", filename);
+	printf(_("Opened %s\n"), filename);
 
     while ((read = getline(&line, &len, fp)) != -1) {
         // printf("Retrieved line of length %zu:\n", read);
@@ -316,11 +329,11 @@ int load_file(const char *filename)
 		note=strtonote(line, &ptr);
         offset=strtol(ptr, &ptr2, 10);
         // printf("%u %u\n", note, offset);
-        if (*ptr2 && *ptr2 != '\n') show_err("Extra ignored: %s", ptr2);
+        if (*ptr2 && *ptr2 != '\n') show_err(_("Extra ignored: %s"), ptr2);
         if (ptr2==ptr){
-			show_err("Missing offset after %s", line); errs++;
+			show_err(_("Missing offset after %s"), line); errs++;
 		}else if(offset<-8192 or offset >8191){
-			show_err("Illegal offset %d", offset); errs++;
+			show_err(_("Illegal offset %d"), offset); errs++;
 		}else{
 			note_offset[note]=offset;
 			note_sliders[note]->value(offset);
@@ -330,7 +343,7 @@ int load_file(const char *filename)
 
     fclose(fp);
     
-	printf("Closed %s\n", filename);
+	printf(_("Closed %s\n"), filename);
 	
     if (line)
         free(line);
@@ -348,16 +361,16 @@ void write_file(const char *filename, bool auto_ext ){
 			strcat(filename2, ".conf");
 		// Check existence and prompt before overwriting
 		if( access( filename2, F_OK ) != -1 ) {
-			if(fl_choice("File already exists. Overwrite?","Yes", "No", 0)){
+			if(fl_choice(_("File already exists. Overwrite?"),_("Yes"), _("No"), 0)){
 				free(filename2);
-				fprintf(stderr, "Write file cancelled.\n");
+				fprintf(stderr, _("Write file cancelled.\n"));
 				return;
 			}
-			printf("Overwriting %s\n", filename2);
+			printf(_("Overwriting %s\n"), filename2);
 		}
 		file=fopen(filename2,"wb");
 		if (file==0){
-			fprintf(stderr,"ERROR: Can not open file %s\n", filename2);
+			fprintf(stderr,_("ERROR: Can not open file %s\n"), filename2);
 		}else{		
 			for (int note=0; note<12;note++){
 				fprintf(file, "%s %d\n", note_names[note], note_offset[note]);
@@ -366,7 +379,7 @@ void write_file(const char *filename, bool auto_ext ){
 		}
 		free(filename2);
 	}else{
-		fprintf(stderr, "ERROR: Cannot allocate memory");
+		fprintf(stderr, _("ERROR: Cannot allocate memory"));
 	}
 }
 
@@ -380,11 +393,11 @@ void fc_load_callback(Fl_File_Chooser *w, void *userdata){
 	if(w->visible()) return; // Do nothing until user has pressed ok
 	int errs=load_file(w->value());
     for(int note=0; note<12; note++) note_sliders[note]->redraw();
-	if(errs) fl_alert("Error(s) loading file %s", w->value());
+	if(errs) fl_alert(_("Error(s) loading file %s"), w->value());
 }
 
 static void btn_load_callback(Fl_Widget* o, void*) {
-    Fl_File_Chooser *fc = new Fl_File_Chooser(".","config files(*.conf)",Fl_File_Chooser::SINGLE,"Input file");
+    Fl_File_Chooser *fc = new Fl_File_Chooser(".",_("config files(*.conf)"),Fl_File_Chooser::SINGLE,_("Input file"));
     fc->preview(0);
     fc->callback(fc_load_callback);
     fc->show();
@@ -397,7 +410,7 @@ void fc_save_callback(Fl_File_Chooser *w, void *userdata){
 }
 
 static void btn_save_callback(Fl_Widget* o, void*) {
-   Fl_File_Chooser *fc = new Fl_File_Chooser(".","config files(*.conf)",Fl_File_Chooser::CREATE,"Output file");
+   Fl_File_Chooser *fc = new Fl_File_Chooser(".",_("config files(*.conf)"),Fl_File_Chooser::CREATE,_("Output file"));
     // fc->value(tone_name);
     fc->preview(0);
     fc->callback(fc_save_callback);
@@ -416,7 +429,7 @@ Fl_Value_Slider *make_value_slider(int x, int y, int w, int h, const char * labe
 	o->callback((Fl_Callback*)parm_callback); // Handles both tone and patch parameters
 	o->slider_size(.04);
 	o->textsize(11);
-	o->tooltip("Use mouse wheel or keyboard arrows for fine adjustment");
+	o->tooltip(_("Use mouse wheel or keyboard arrows for fine adjustment"));
 	note_sliders[note_number]=o;
 	return(o);
 }
@@ -441,15 +454,15 @@ Fl_Double_Window* make_window() {
 	make_value_slider(x, y, w, 11*h, "A", 9); x += w + spacing;
 	make_value_slider(x, y, w, 11*h, "A#", 10); x += w + spacing;
 	make_value_slider(x, y, w, 11*h, "B", 11); x += w + spacing;
-	Fl_Button *b=new Fl_Button(x, y, w, h, "Load"); y += h+spacing;
+	Fl_Button *b=new Fl_Button(x, y, w, h, _("Load")); y += h+spacing;
 	b->callback((Fl_Callback*)btn_load_callback);
-	b=new Fl_Button(x, y, w, h, "Save"); y += h+spacing;
+	b=new Fl_Button(x, y, w, h, _("Save")); y += h+spacing;
 	b->callback((Fl_Callback*)btn_save_callback);
 	y += 25; // room for label
-	txt_midi_channel=new Fl_Input(x, y, w, h, "ch.");
+	txt_midi_channel=new Fl_Input(x, y, w, h, _("ch."));
 	txt_midi_channel->align(FL_ALIGN_TOP);
 	txt_midi_channel->callback((Fl_Callback*)txt_midi_channel_callback);
-	txt_midi_channel->tooltip("Set the midi channel (1..16)");
+	txt_midi_channel->tooltip(_("Set the midi channel (1..16)"));
 	char str_midi_channel[5];
 	sprintf(str_midi_channel, "%u", midi_channel+1);
 	txt_midi_channel->value(str_midi_channel);
@@ -652,6 +665,11 @@ static void *alsa_midi_process(void *) {
 
 int main(int argc, char **argv) {
 	
+	/* Setting the i18n environment */
+	setlocale (LC_ALL, "");
+	bindtextdomain ("autobend", "/usr/share/locale/"); // getenv("PWD")); // .mo must be in same folder
+	textdomain ("autobend");
+	
 	Fl_Window* win = make_window();
 //	win->callback(window_callback);
 
@@ -674,7 +692,7 @@ int main(int argc, char **argv) {
 	// create the thread
 	int err = pthread_create(&midithread, NULL, alsa_midi_process, seq_handle);
 	if (err) {
-		show_err("Error %u creating MIDI thread\n", err);
+		show_err(_("Error %u creating MIDI thread\n"), err);
 		exit(-1);
 	}
 
@@ -686,5 +704,5 @@ int main(int argc, char **argv) {
 	// release Alsa Midi connection
 	snd_seq_close(seq_handle);
 	
-	printf("Bye!\n");
+	printf(_("Bye!\n"));
 }
