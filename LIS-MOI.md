@@ -1,4 +1,4 @@
-## Résume
+## Résumé
 
 Applique un pitch bend selon la note active.
 
@@ -46,3 +46,6 @@ mais l'intervalle musical correspondant dépend de votre synthé, l'accord doit 
 L'accord peut être enregistré dans un fichier de type .conf.
 Il s'agit d'un simple fichier texte, avec une syntaxe élémentaire:
 chaque ligne est de la forme "note espace décalage", par exemple E -2048.
+
+## Remerciements
+Merci à jmechmech pour l'idée de départ et les tests.
