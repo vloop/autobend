@@ -1,9 +1,20 @@
 ## Résumé
 
+1) autobend
 Applique un pitch bend selon la note active.
 
-Ceci permet un microtuning sur les synthés mono qui ne l'ont pas d'origine.
+Ce programme fournit une des nombreus fonctionnalités offertes par le programme microtonal Scala.
+Il vise avant tout la simplicité d'utilisation et la légèreté de l'outil.
+Il permet un microtuning sur les synthés mono qui ne l'ont pas d'origine.
 Ceci ne peut marcher qu'en mode mono: le pitch bend est un message de canal, si on joue un accord le même pitch bend s'applique à toutes les notes.
+Scala attempts to work around this by rotating note channels, depending on your polysynth this may work or not.
+voir aussi Scala sur http://www.huygens-fokker.org/scala/
+
+2) autohold
+Implémente les pédales pour les synthés polyphoniques qui ne les gèrent pas d'origine.
+
+Convient pour les pédales triples (pédale forte, sostenuto, una corda)
+La pédale forte est traitée en tout ou rien.
 
 ## Installation
 
@@ -21,18 +32,20 @@ sudo apt install libasound2-dev
 ```
 sudo apt install libfltk1.3-dev
 ```
-- Compiation:
+- Compilation:
 ```
-gcc autobend.c -o autobend -lfltk -lasound -lpthread -lstdc++
+gcc autobend.cxx -o autobend -lfltk -lasound -lpthread -lstdc++
+gcc autohold.cxx -o autohold -lasound -lpthread -lstdc++
 ```
 - Installation:
 ```
 sudo cp autobend /usr/local/bin/
 sudo cp po/fr/autobend.mo /usr/share/locale/fr/LC_MESSAGES/
+sudo cp autohold /usr/local/bin/
 ```
 ## Utilisation
 ```
-autobend [file]
+autobend [fichier]
 ```
 L'utilisation des curseurs avec la souris permet seulement un ajustement sommaire,
 pour ajuster finement il faut utiliser les raccourcis clavier flèche haut et bas, + et - sur le pavé numérique,
@@ -43,9 +56,22 @@ Autobend ne peut pas connaître la plage du pitch bend sur votre synthétiseur.
 La plage des messages pitch bend midi est fixe de -8192 à 8191
 mais l'intervalle musical correspondant dépend de votre synthé, l'accord doit être fait à l'oreille.
 
-L'accord peut être enregistré dans un fichier de type .conf.
+L'accordage peut être enregistré dans un fichier de type .conf.
 Il s'agit d'un simple fichier texte, avec une syntaxe élémentaire:
 chaque ligne est de la forme "note espace décalage", par exemple E -2048.
+
+```
+autohold [option]...
+```
+Il s'agit d'un outil en ligne de commande.
+Utilisez l'option -h pour plus d'information.
+
+```
+Connexions
+```
+Dans la plupart des cas, il vous faudra connecter la sortie de votre clavier maître à l'entrée de l'outil (autobend ou autohold)
+et la sortie de l'outil à l'entrée du synthétiseur.
+Un outil pratique pour gérer les connexions est qjackctl. aconnect fait aussi l'affaire.
 
 ## Remerciements
 Merci à jmechmech pour l'idée de départ et les tests.
